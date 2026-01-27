@@ -1,0 +1,9 @@
+{
+  "model_type": 0,
+  "confidence_threshold": 0.3,
+  "line_width": 3,
+  "enhance_image": true,
+  "save_overlay": true,
+  "save_json": true,
+  "auto_open": true
+}

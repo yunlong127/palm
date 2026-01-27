@@ -1,0 +1,35 @@
+# GUI 依赖
+# 基础依赖
+Pillow>=9.5.0        # 图像处理
+opencv-python>=4.7.0  # 计算机视觉
+
+# 界面库
+# tkinter 是 Python 标准库的一部分，不需要通过 pip 安装
+# 如果 tkinter 不可用，请使用以下命令安装（Windows）：
+#   pip install tk
+# 或者在 Linux 上：
+#   sudo apt-get install python3-tk
+
+# 数据处理
+numpy>=1.24.0        # 数值计算
+pandas>=2.0.0        # 数据处理
+
+# 其他
+tqdm>=4.65.0         # 进度条
+colorama>=0.4.6      # 终端颜色
+
+# 与主项目共享的依赖
+# 以下依赖与主项目的 requirements.txt 相同，确保版本一致
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+matplotlib>=3.7.0
+scikit-learn>=1.3.0
+albumentations>=1.3.0
+timm>=0.9.0
+
+# 可选依赖
+# 以下依赖是可选的，根据需要安装
+# pyqt5>=5.15.0       # 替代 tkinter 的 GUI 框架
+# wxPython>=4.2.0     # 另一个 GUI 框架
+# streamlit>=1.20.0   # Web 界面框架
