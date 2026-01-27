@@ -164,10 +164,16 @@ class PalmLinePredictor:
     
     def predict_single_image(self, image_path, mask_path=None):
         """预测单张图像"""
-        # 读取图像
-        image = cv2.imread(str(image_path))
-        if image is None:
-            raise ValueError(f"无法读取图像: {image_path}")
+        # 读取图像 - 使用PIL来处理中文路径
+        try:
+            from PIL import Image
+            pil_image = Image.open(str(image_path))
+            image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            # 如果PIL失败，尝试cv2
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise ValueError(f"无法读取图像: {image_path}, 错误: {e}")
         
         original_shape = image.shape[:2]
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -193,10 +199,15 @@ class PalmLinePredictor:
         # 读取标注答案（如果提供）
         ground_truth = None
         if mask_path and os.path.exists(mask_path):
-            ground_truth = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            if ground_truth is not None:
+            # 使用PIL读取标注答案
+            try:
+                from PIL import Image
+                pil_mask = Image.open(str(mask_path)).convert('L')
+                ground_truth = np.array(pil_mask)
                 # 调整到原始图像大小
                 ground_truth = cv2.resize(ground_truth, (original_shape[1], original_shape[0]))
+            except Exception as e:
+                print(f"无法读取标注答案: {mask_path}, 错误: {e}")
         
         # 计算IoU（如果有标注答案）
         iou = None

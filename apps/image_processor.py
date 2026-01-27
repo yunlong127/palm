@@ -87,10 +87,12 @@ class ImageProcessor:
         try:
             # 检查文件
             if not os.path.exists(image_path):
+                error_msg = f"图片文件不存在: {image_path}"
+                print(error_msg)
                 return ProcessResult(
                     success=False,
                     processing_time=time.time() - start_time,
-                    error_message="图片文件不存在",
+                    error_message=error_msg,
                     suggestions=["请检查文件路径是否正确", "确保文件没有被移动或删除"]
                 )
             
@@ -105,14 +107,24 @@ class ImageProcessor:
                     )
             
             # 读取图像
+            print(f"尝试读取图片: {image_path}")
             image = cv2.imread(image_path)
             if image is None:
-                return ProcessResult(
-                    success=False,
-                    processing_time=time.time() - start_time,
-                    error_message="无法读取图片",
-                    suggestions=["请检查图片格式是否支持", "尝试使用其他图片"]
-                )
+                # 尝试使用numpy读取
+                try:
+                    from PIL import Image
+                    pil_image = Image.open(image_path)
+                    image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                    print("使用PIL成功读取图片")
+                except Exception as e:
+                    error_msg = f"无法读取图片: {image_path}, 错误: {e}"
+                    print(error_msg)
+                    return ProcessResult(
+                        success=False,
+                        processing_time=time.time() - start_time,
+                        error_message=error_msg,
+                        suggestions=["请检查图片格式是否支持", "尝试使用其他图片", "确保文件路径正确"]
+                    )
             
             original_size = image.shape[:2]
             
@@ -123,13 +135,18 @@ class ImageProcessor:
             mask_path = self.find_mask_path(image_path)
             
             # 使用预测器进行预测
+            print(f"开始预测: {image_path}")
             results = self.predictor.predict_single_image(image_path, mask_path)
+            print(f"预测完成，结果键: {results.keys()}")
             
             # 计算处理时间
             processing_time = time.time() - start_time
+            print(f"处理时间: {processing_time:.2f}秒")
             
             # 准备结果
             confidences = self.calculate_confidences(results)
+            print(f"置信度: {confidences}")
+            
             suggestions = self.generate_suggestions(results, confidences)
             
             # 提取线条数据

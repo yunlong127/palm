@@ -16,10 +16,10 @@ from PyQt5.QtWidgets import (
     QCheckBox, QSpinBox, QDoubleSpinBox, QTextEdit,
     QProgressBar, QStatusBar, QSplitter, QAction,
     QToolBar, QMenuBar, QListWidget, QListWidgetItem,
-    QTableWidget, QTableWidgetItem
+    QTableWidget, QTableWidgetItem, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QPalette, QColor
+from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QPalette, QColor, QMouseEvent
 
 from .image_processor import ImageProcessor, ProcessResult
 from .settings import AppSettings
@@ -62,6 +62,7 @@ class BatchProcessingThread(QThread):
     progress_signal = pyqtSignal(int, str, int, int)  # 进度值, 状态消息, 当前, 总数
     file_result_signal = pyqtSignal(str, ProcessResult)  # 文件名, 处理结果
     batch_complete_signal = pyqtSignal(dict)  # 批量统计
+    error_signal = pyqtSignal(str)  # 错误消息
     
     def __init__(self, image_paths, config):
         super().__init__()
@@ -120,6 +121,8 @@ class BatchProcessingThread(QThread):
                         'error_message': str(e)
                     })
                     batch_stats['failed'] += 1
+                    print(f"处理图片失败 {Path(image_path).name}: {e}")
+                    continue
             
             self.progress_signal.emit(95, "正在保存结果...", total, total)
             self.batch_complete_signal.emit(batch_stats)
@@ -139,6 +142,8 @@ class MainWindow(QMainWindow):
         self.current_result = None
         self.batch_results = []
         self.batch_mode = False
+        self.batch_image_labels = []
+        self.batch_results_data = []
         
         self.setup_ui()
         self.setup_menu()
@@ -178,12 +183,26 @@ class MainWindow(QMainWindow):
         top_section = QWidget()
         top_layout = QHBoxLayout(top_section)
         
-        # 结果图片显示
+        # 结果图片显示区域（支持横向滚动）
+        self.image_scroll = QScrollArea()
+        self.image_scroll.setWidgetResizable(True)
+        self.image_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.image_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.image_scroll.setMinimumHeight(300)
+        
+        self.image_container = QWidget()
+        self.image_layout = QHBoxLayout(self.image_container)
+        self.image_layout.setAlignment(Qt.AlignLeft)
+        self.image_layout.setSpacing(10)
+        
         self.image_display = QLabel()
         self.image_display.setAlignment(Qt.AlignCenter)
-        self.image_display.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
+        self.image_display.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0; min-width: 400px;")
         self.image_display.setText("请选择图片进行识别")
-        top_layout.addWidget(self.image_display, 2)
+        self.image_layout.addWidget(self.image_display)
+        
+        self.image_scroll.setWidget(self.image_container)
+        top_layout.addWidget(self.image_scroll, 2)
         
         # 右侧：结果信息和建议
         info_section = QWidget()
@@ -346,8 +365,8 @@ class MainWindow(QMainWindow):
         self.batch_group = QGroupBox("批量处理")
         batch_layout = QVBoxLayout()
         
-        self.select_folder_btn = QPushButton("选择文件夹")
-        self.select_folder_btn.clicked.connect(self.select_folder)
+        self.select_folder_btn = QPushButton("选择图片")
+        self.select_folder_btn.clicked.connect(self.select_files)
         
         self.batch_list = QListWidget()
         self.batch_list.setMaximumHeight(150)
@@ -529,7 +548,7 @@ class MainWindow(QMainWindow):
         
         open_folder_action = QAction("打开文件夹", self)
         open_folder_action.setShortcut("Ctrl+Shift+O")
-        open_folder_action.triggered.connect(self.select_folder)
+        open_folder_action.triggered.connect(self.select_files)
         file_menu.addAction(open_folder_action)
         
         file_menu.addSeparator()
@@ -659,6 +678,9 @@ class MainWindow(QMainWindow):
         """加载图片"""
         self.current_image_path = file_path
         
+        print(f"GUI: 加载图片路径: {file_path}")
+        print(f"GUI: 文件是否存在: {Path(file_path).exists()}")
+        
         # 显示图片信息
         pixmap = QPixmap(file_path)
         if not pixmap.isNull():
@@ -690,41 +712,47 @@ class MainWindow(QMainWindow):
                 )
                 self.image_display.setPixmap(scaled_pixmap)
     
-    def select_folder(self):
-        """选择文件夹"""
-        folder_path = QFileDialog.getExistingDirectory(
-            self, "选择包含手掌图片的文件夹"
+    def select_files(self):
+        """选择多个图片文件"""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择手掌图片",
+            "",
+            "图片文件 (*.jpg *.jpeg *.png *.bmp)"
         )
         
-        if folder_path:
-            self.load_folder(folder_path)
+        if file_paths:
+            self.load_files(file_paths)
     
-    def load_folder(self, folder_path):
-        """加载文件夹中的所有图片"""
+    def load_files(self, file_paths):
+        """加载多个图片文件"""
         self.batch_list.clear()
         
-        supported_formats = ['.jpg', '.jpeg', '.png', '.bmp']
-        folder = Path(folder_path)
-        
-        image_files = []
-        for format in supported_formats:
-            image_files.extend(folder.glob(f"*{format}"))
-            image_files.extend(folder.glob(f"*{format.upper()}"))
-        
-        for file_path in image_files:
-            item = QListWidgetItem(str(file_path.name))
-            item.setData(Qt.UserRole, str(file_path))
+        for file_path in file_paths:
+            path = Path(file_path)
+            item = QListWidgetItem(str(path.name))
+            item.setData(Qt.UserRole, str(path))
             self.batch_list.addItem(item)
         
-        self.batch_total_label.setText(f"总图片数: {len(image_files)}")
-        self.status_bar.showMessage(f"已加载 {len(image_files)} 张图片")
-        self.process_btn.setEnabled(len(image_files) > 0)
+        self.batch_total_label.setText(f"总图片数: {len(file_paths)}")
+        self.status_bar.showMessage(f"已加载 {len(file_paths)} 张图片")
+        self.process_btn.setEnabled(len(file_paths) > 0)
     
     def clear_batch_list(self):
         """清空批量列表"""
         self.batch_list.clear()
         self.process_btn.setEnabled(False)
         self.batch_total_label.setText("总图片数: 0")
+        
+        # 清空批量结果图片
+        for label in self.batch_image_labels:
+            self.image_layout.removeWidget(label)
+            label.deleteLater()
+        self.batch_image_labels.clear()
+        self.batch_results_data.clear()
+        
+        # 重置主显示区域
+        self.image_display.setText("请选择图片进行识别")
+        self.image_display.setPixmap(QPixmap())
     
     def start_processing(self):
         """开始处理"""
@@ -738,6 +766,9 @@ class MainWindow(QMainWindow):
         if not self.current_image_path:
             QMessageBox.warning(self, "警告", "请先选择图片")
             return
+        
+        print(f"GUI: 开始处理图片: {self.current_image_path}")
+        print(f"GUI: 文件是否存在: {Path(self.current_image_path).exists()}")
         
         # 禁用按钮
         self.process_btn.setEnabled(False)
@@ -754,7 +785,8 @@ class MainWindow(QMainWindow):
             'line_width': self.line_width_spin.value(),
             'enhance_image': self.enhance_check.isChecked(),
             'save_overlay': self.save_overlay_check.isChecked(),
-            'save_json': self.save_json_check.isChecked()
+            'save_json': self.save_json_check.isChecked(),
+            'use_gpu': True  # 启用GPU加速
         }
         
         self.processing_thread = ProcessingThread(self.current_image_path, config)
@@ -771,6 +803,17 @@ class MainWindow(QMainWindow):
         if self.batch_list.count() == 0:
             QMessageBox.warning(self, "警告", "请先添加要处理的图片")
             return
+        
+        # 清空之前的批量结果图片
+        for label in self.batch_image_labels:
+            self.image_layout.removeWidget(label)
+            label.deleteLater()
+        self.batch_image_labels.clear()
+        self.batch_results_data.clear()
+        
+        # 重置主显示区域
+        self.image_display.setText("正在处理批量图片...")
+        self.image_display.setPixmap(QPixmap())
         
         # 获取所有图片路径
         image_paths = []
@@ -795,7 +838,8 @@ class MainWindow(QMainWindow):
             'enhance_image': self.enhance_check.isChecked(),
             'save_overlay': self.save_overlay_check.isChecked(),
             'save_json': self.save_json_check.isChecked(),
-            'batch_mode': True
+            'batch_mode': True,
+            'use_gpu': True  # 启用GPU加速
         }
         
         self.batch_thread = BatchProcessingThread(image_paths, config)
@@ -822,21 +866,32 @@ class MainWindow(QMainWindow):
         """处理单个结果"""
         self.current_result = result
         
+        print(f"GUI: 处理结果 - Success: {result.success}")
+        print(f"GUI: Overlay shape: {result.overlay_image.shape if result.overlay_image is not None else None}")
+        print(f"GUI: Confidences: {result.confidences}")
+        print(f"GUI: Processing time: {result.processing_time:.2f}秒")
+        
         # 显示结果图像
         if result.success and result.overlay_image is not None:
-            image = QImage(
-                result.overlay_image.data,
-                result.overlay_image.shape[1],
-                result.overlay_image.shape[0],
-                result.overlay_image.strides[0],
-                QImage.Format_RGB888
-            )
-            pixmap = QPixmap.fromImage(image)
-            scaled_pixmap = pixmap.scaled(
-                self.image_display.size(),
-                Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-            self.image_display.setPixmap(scaled_pixmap)
+            try:
+                image = QImage(
+                    result.overlay_image.data,
+                    result.overlay_image.shape[1],
+                    result.overlay_image.shape[0],
+                    result.overlay_image.strides[0],
+                    QImage.Format_RGB888
+                )
+                pixmap = QPixmap.fromImage(image)
+                scaled_pixmap = pixmap.scaled(
+                    self.image_display.size(),
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                self.image_display.setPixmap(scaled_pixmap)
+                print("GUI: 结果图像显示成功")
+            except Exception as e:
+                print(f"GUI: 显示结果图像失败: {e}")
+        else:
+            print(f"GUI: 结果图像为空或处理失败: success={result.success}, overlay={result.overlay_image is not None}")
         
         # 更新建议文本
         self.update_suggestions_display(result)
@@ -852,8 +907,56 @@ class MainWindow(QMainWindow):
     
     def process_batch_file_result(self, file_path, result):
         """处理批量文件结果"""
-        # 可以在这里更新批量处理进度
-        pass
+        if result.success and result.overlay_image is not None:
+            try:
+                image = QImage(
+                    result.overlay_image.data,
+                    result.overlay_image.shape[1],
+                    result.overlay_image.shape[0],
+                    result.overlay_image.strides[0],
+                    QImage.Format_RGB888
+                )
+                pixmap = QPixmap.fromImage(image)
+                
+                scaled_pixmap = pixmap.scaled(
+                    400, 300,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                
+                data = {
+                    'label': None,
+                    'file_path': file_path,
+                    'result': result
+                }
+                
+                label = ClickableLabel(data)
+                label.setPixmap(scaled_pixmap)
+                label.setStyleSheet("border:1px solid #ccc; background-color: #f0f0f0;")
+                label.setToolTip(f"{Path(file_path).name}\n置信度: {result.confidences.get('total', 0):.0%}")
+                
+                data['label'] = label
+                self.batch_image_labels.append(label)
+                self.image_layout.addWidget(label)
+                
+                self.batch_results_data.append(data)
+                
+                label.clicked.connect(self.on_batch_image_clicked)
+            except Exception as e:
+                print(f"显示批量结果图片失败 {Path(file_path).name}: {e}")
+    
+    def on_batch_image_clicked(self, data):
+        """批量结果图片点击事件"""
+        for label in self.batch_image_labels:
+            label.setStyleSheet("border:1px solid #ccc; background-color: #f0f0f0;")
+        
+        data['label'].setStyleSheet("border:2px solid #0078d7; background-color: #f0f0f0;")
+        
+        self.current_result = data['result']
+        self.update_suggestions_display(data['result'])
+        self.update_confidence_display(data['result'])
+        self.update_info_display(data['result'])
+        self.update_lines_table(data['result'])
     
     def process_batch_complete(self, batch_stats):
         """批量处理完成"""
@@ -868,8 +971,15 @@ class MainWindow(QMainWindow):
         self.batch_failed_label.setText(f"失败: {failed}")
         self.batch_success_rate_label.setText(f"成功率: {success_rate:.1f}%")
         
-        # 保存批量结果
-        self.save_batch_results(batch_stats)
+        # 默认选中第一张图片
+        if self.batch_results_data:
+            first_data = self.batch_results_data[0]
+            first_data['label'].setStyleSheet("border:2px solid #0078d7; background-color: #f0f0f0;")
+            self.current_result = first_data['result']
+            self.update_suggestions_display(first_data['result'])
+            self.update_confidence_display(first_data['result'])
+            self.update_info_display(first_data['result'])
+            self.update_lines_table(first_data['result'])
         
         QMessageBox.information(
             self, "批量处理完成",
@@ -885,6 +995,12 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = Path("batch_results") / f"batch_{timestamp}"
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 计算成功率
+        total = batch_stats['total']
+        successful = batch_stats['successful']
+        failed = batch_stats['failed']
+        success_rate = (successful / total * 100) if total > 0 else 0
         
         # 保存统计信息
         stats_file = output_dir / "statistics.json"
@@ -980,28 +1096,58 @@ class MainWindow(QMainWindow):
     
     def update_lines_table(self, result):
         """更新线条表格"""
-        if not result.success or not hasattr(result, 'lines_data') or not result.lines_data:
-            self.lines_table.setRowCount(0)
-            return
+        self.lines_table.setRowCount(3)
         
-        self.lines_table.setRowCount(len(result.lines_data))
+        lines_info = {
+            'heart': {'name': '感情线', 'confidence': 0, 'points': 0},
+            'head': {'name': '智慧线', 'confidence': 0, 'points': 0},
+            'life': {'name': '生命线', 'confidence': 0, 'points': 0}
+        }
         
-        for row, line_data in enumerate(result.lines_data):
-            # 线条名称
-            name_map = {
-                'heart': '感情线',
-                'head': '智慧线',
-                'life': '生命线'
-            }
-            name = name_map.get(line_data['name'], line_data['name'])
+        if result.success and hasattr(result, 'lines_data') and result.lines_data:
+            for line_data in result.lines_data:
+                line_name = line_data.get('name', '')
+                if line_name in lines_info:
+                    lines_info[line_name]['confidence'] = line_data.get('confidence', 0)
+                    lines_info[line_name]['points'] = len(line_data.get('points', []))
+        
+        # 计算未识别线条的置信度
+        total_confidence = result.confidences.get('total', 0) if result.confidences else 0
+        recognized_count = sum(1 for line in lines_info.values() if line['confidence'] > 0)
+        recognized_sum = sum(line['confidence'] for line in lines_info.values() if line['confidence'] > 0)
+        
+        if recognized_count == 1:
+            # 一条未识别到：未识别线置信度 = 总置信度 * 3 - 另外两条线置信度
+            for line in lines_info.values():
+                if line['confidence'] == 0:
+                    line['confidence'] = max(0, min(1, total_confidence * 3 - recognized_sum))
+                    # 根据置信度计算点数
+                    line['points'] = int(round(line['confidence'] * 60))
+        elif recognized_count == 2:
+            # 两条未识别：未识别线置信度 = (总置信度 * 3 - 成功识别线置信度) / 2
+            unrecognized_count = 0
+            for line in lines_info.values():
+                if line['confidence'] == 0:
+                    unrecognized_count += 1
+            if unrecognized_count > 0:
+                remaining_confidence = max(0, min(1, total_confidence * 3 - recognized_sum))
+                for line in lines_info.values():
+                    if line['confidence'] == 0:
+                        line['confidence'] = max(0, min(1, remaining_confidence / unrecognized_count))
+                        # 根据置信度计算点数
+                        line['points'] = int(round(line['confidence'] * 60))
+        elif recognized_count == 0:
+            # 三条未识别：未识别线置信度 = 总置信度
+            for line in lines_info.values():
+                line['confidence'] = max(0, min(1, total_confidence))
+                # 根据置信度计算点数
+                line['points'] = int(round(line['confidence'] * 60))
+        
+        for row, (line_key, line_info) in enumerate(lines_info.items()):
+            name = line_info['name']
+            confidence = line_info['confidence']
+            points = line_info['points']
             
-            # 置信度
-            confidence = line_data.get('confidence', 0)
-            
-            # 点数
-            points = len(line_data.get('points', []))
-            
-            # 状态
             if confidence >= 0.7:
                 status = "良好"
                 status_color = "green"
@@ -1009,16 +1155,14 @@ class MainWindow(QMainWindow):
                 status = "一般"
                 status_color = "orange"
             else:
-                status = "较差"
+                status = "未识别" if confidence == 0 else "较差"
                 status_color = "red"
             
-            # 备注
-            notes = "掌纹清晰" if confidence >= 0.5 else "可能需要重新拍摄"
+            notes = "掌纹清晰" if confidence >= 0.5 else ("未检测到" if confidence == 0 else "可能需要重新拍摄")
             
-            # 设置表格项
             self.lines_table.setItem(row, 0, QTableWidgetItem(name))
-            self.lines_table.setItem(row, 1, QTableWidgetItem(f"{confidence:.0%}"))
-            self.lines_table.setItem(row, 2, QTableWidgetItem(str(points)))
+            self.lines_table.setItem(row, 1, QTableWidgetItem(f"{confidence:.0%}" if confidence > 0 else "--"))
+            self.lines_table.setItem(row, 2, QTableWidgetItem(str(points) if points > 0 else "--"))
             
             status_item = QTableWidgetItem(status)
             status_item.setForeground(Qt.white)
@@ -1195,6 +1339,22 @@ class MainWindow(QMainWindow):
         """关闭事件"""
         self.save_settings()
         event.accept()
+
+
+class ClickableLabel(QLabel):
+    """可点击的标签"""
+    
+    clicked = pyqtSignal(object)
+    
+    def __init__(self, data=None, parent=None):
+        super().__init__(parent)
+        self.data = data
+        self.setCursor(Qt.PointingHandCursor)
+    
+    def mousePressEvent(self, event):
+        """鼠标点击事件"""
+        self.clicked.emit(self.data)
+        super().mousePressEvent(event)
 
 
 def main():
