@@ -643,6 +643,9 @@ class MainWindow(QMainWindow):
         # 处理线程
         self.processing_thread = None
         self.batch_thread = None
+        
+        # 模型选择变化时检查模型文件
+        self.model_combo.currentIndexChanged.connect(self.on_model_type_changed)
     
     def set_single_mode(self):
         """设置为单张图片模式"""
@@ -663,6 +666,22 @@ class MainWindow(QMainWindow):
         self.batch_mode = True
         self.batch_stats_group.setVisible(True)
         self.process_btn.setText("开始批量识别")
+    
+    def on_model_type_changed(self, index):
+        """模型类型变化时的处理"""
+        if index == 1:  # ResUNet
+            resunet_path = Path("checkpoints/best_resunet_model.pth")
+            if not resunet_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "模型文件不存在",
+                    "ResUNet模型文件不存在，将自动使用U-Net模型。\n"
+                    "如需使用ResUNet，请先训练模型或下载模型文件。"
+                )
+                # 自动切换回U-Net
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentIndex(0)
+                self.model_combo.blockSignals(False)
     
     def select_image(self):
         """选择图片"""
@@ -1109,7 +1128,7 @@ class MainWindow(QMainWindow):
                 line_name = line_data.get('name', '')
                 if line_name in lines_info:
                     lines_info[line_name]['confidence'] = line_data.get('confidence', 0)
-                    lines_info[line_name]['points'] = len(line_data.get('points', []))
+                    lines_info[line_name]['points'] = line_data.get('points', 0)
         
         # 计算未识别线条的置信度
         total_confidence = result.confidences.get('total', 0) if result.confidences else 0
@@ -1315,7 +1334,22 @@ class MainWindow(QMainWindow):
             settings = self.settings.load()
             if settings:
                 # 加载上次的设置
-                pass
+                model_type_index = settings.get('model_type', 0)
+                
+                # 检查ResUNet模型是否存在
+                if model_type_index == 1:  # ResUNet
+                    resunet_path = Path("checkpoints/best_resunet_model.pth")
+                    if not resunet_path.exists():
+                        print("警告: ResUNet模型文件不存在，自动切换到U-Net模型")
+                        model_type_index = 0
+                
+                self.model_combo.setCurrentIndex(model_type_index)
+                self.confidence_spin.setValue(settings.get('confidence_threshold', 0.3))
+                self.line_width_spin.setValue(settings.get('line_width', 3))
+                self.enhance_check.setChecked(settings.get('enhance_image', True))
+                self.save_overlay_check.setChecked(settings.get('save_overlay', True))
+                self.save_json_check.setChecked(settings.get('save_json', True))
+                self.auto_open_check.setChecked(settings.get('auto_open', True))
         except Exception as e:
             print(f"加载设置失败: {e}")
     

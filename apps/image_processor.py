@@ -50,8 +50,8 @@ class ImageProcessor:
         
         # 默认模型路径
         self.model_paths = {
-            'unet': 'checkpoints/best_three_lines_model.pth',
-            'resunet': 'checkpoints/best_resunet_model.pth'
+            'unet': 'checkpoints/checkpoint_epoch_50.pth',
+            'resunet': 'checkpoints/checkpoint_epoch_50.pth'
         }
     
     def load_model(self) -> bool:
@@ -64,12 +64,30 @@ class ImageProcessor:
             model_path = self.model_paths.get(model_type)
             
             if not os.path.exists(model_path):
-                # 尝试其他可能的位置
-                alt_path = Path("checkpoints") / "best_model.pth"
-                if alt_path.exists():
-                    model_path = str(alt_path)
+                print(f"警告: {model_type} 模型文件不存在: {model_path}")
+                
+                # 尝试回退到U-Net模型
+                if model_type != 'unet':
+                    unet_path = self.model_paths.get('unet')
+                    if os.path.exists(unet_path):
+                        print(f"自动回退到U-Net模型: {unet_path}")
+                        model_path = unet_path
+                    else:
+                        # 尝试其他可能的位置
+                        alt_path = Path("checkpoints") / "best_model.pth"
+                        if alt_path.exists():
+                            model_path = str(alt_path)
+                        else:
+                            print("错误: 没有找到可用的模型文件")
+                            return False
                 else:
-                    return False
+                    # U-Net模型不存在，尝试其他位置
+                    alt_path = Path("checkpoints") / "best_model.pth"
+                    if alt_path.exists():
+                        model_path = str(alt_path)
+                    else:
+                        print("错误: 没有找到可用的模型文件")
+                        return False
             
             device = 'cuda' if self.config.get('use_gpu', True) else 'cpu'
             self.predictor = PalmLinePredictor(model_path, device)
@@ -152,9 +170,14 @@ class ImageProcessor:
             # 提取线条数据
             lines_data = self.extract_lines_data(results)
             
+            # 将 overlay 从 BGR 转换为 RGB，以便正确显示
+            overlay = results.get('overlay')
+            if overlay is not None:
+                overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+            
             return ProcessResult(
                 success=True,
-                overlay_image=results.get('overlay'),
+                overlay_image=overlay,
                 confidences=confidences,
                 processing_time=processing_time,
                 suggestions=suggestions,
@@ -353,42 +376,73 @@ class ImageProcessor:
         return suggestions
     
     def extract_lines_data(self, results: Dict) -> List[Dict]:
-        """提取线条数据"""
-        lines_data = []
+        """提取线条数据，智能计算缺失线条"""
+        lines_info = {
+            'heart': {'name': '感情线', 'confidence': 0, 'points': 0, 'note': '-'},
+            'head': {'name': '智慧线', 'confidence': 0, 'points': 0, 'note': '-'},
+            'life': {'name': '生命线', 'confidence': 0, 'points': 0, 'note': '-'}
+        }
         
-        # 从预测结果中提取线条轮廓
         pred_mask = results.get('full_prediction')
         if pred_mask is None:
-            return lines_data
+            return [{'name': k, 'confidence': 0, 'points': 0, 'length': 0, 'note': '未检测到'} 
+                    for k in ['heart', 'head', 'life']]
         
-        # 二值化
         _, binary = cv2.threshold(pred_mask, 127, 255, cv2.THRESH_BINARY)
-        
-        # 找到所有轮廓
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        if not contours:
-            return lines_data
-        
-        # 按面积排序，取最大的三个作为三条主线
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
-        
-        line_names = ['heart', 'head', 'life']
-        for i, (contour, line_name) in enumerate(zip(contours, line_names)):
-            # 简化轮廓
-            epsilon = 0.001 * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
+        if contours:
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)[:3]
+            line_names = ['heart', 'head', 'life']
             
-            # 提取点集
-            points = approx.squeeze().tolist()
-            if isinstance(points[0], float):
-                points = [points]  # 单个点的情况
-            
+            for i, (contour, line_name) in enumerate(zip(contours, line_names)):
+                epsilon = 0.001 * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                
+                points = approx.squeeze().tolist()
+                if isinstance(points[0], float):
+                    points = [points]
+                
+                lines_info[line_name]['confidence'] = 0.8 - i * 0.1
+                lines_info[line_name]['points'] = len(points)
+                lines_info[line_name]['length'] = len(points)
+        
+        total_confidence = self.calculate_area_ratio_confidence(results)
+        recognized_count = sum(1 for line in lines_info.values() if line['confidence'] > 0)
+        recognized_sum = sum(line['confidence'] for line in lines_info.values() if line['confidence'] > 0)
+        
+        if recognized_count == 1:
+            for line in lines_info.values():
+                if line['confidence'] == 0:
+                    line['confidence'] = max(0, min(1, total_confidence * 3 - recognized_sum))
+                    line['points'] = int(round(line['confidence'] * 60))
+                    line['length'] = line['points']
+                    line['note'] = '智能推算'
+        elif recognized_count == 2:
+            unrecognized_count = sum(1 for line in lines_info.values() if line['confidence'] == 0)
+            if unrecognized_count > 0:
+                remaining_confidence = max(0, min(1, total_confidence * 3 - recognized_sum))
+                for line in lines_info.values():
+                    if line['confidence'] == 0:
+                        line['confidence'] = max(0, min(1, remaining_confidence / unrecognized_count))
+                        line['points'] = int(round(line['confidence'] * 60))
+                        line['length'] = line['points']
+                        line['note'] = '智能推算'
+        elif recognized_count == 0:
+            for line in lines_info.values():
+                line['confidence'] = max(0, min(1, total_confidence))
+                line['points'] = int(round(line['confidence'] * 60))
+                line['length'] = line['points']
+                line['note'] = '智能推算'
+        
+        lines_data = []
+        for line_key, line_info in lines_info.items():
             lines_data.append({
-                'name': line_name,
-                'points': points,
-                'length': len(points),
-                'confidence': 0.8 - i * 0.1  # 简单的置信度分配
+                'name': line_key,
+                'confidence': line_info['confidence'],
+                'points': line_info['points'],
+                'length': line_info['length'],
+                'note': line_info['note']
             })
         
         return lines_data

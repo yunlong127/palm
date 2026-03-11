@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-手掌掌纹识别系统 - 桌面应用启动脚本
+手掌掌纹识别系统 - 网页应用启动脚本
 """
 
 import sys
@@ -15,10 +15,10 @@ sys.path.append(str(project_root))
 def check_dependencies():
     """检查依赖"""
     try:
-        from PyQt5.QtWidgets import QApplication
-        print("✓ PyQt5 已安装")
+        import gradio as gr
+        print("✓ Gradio 已安装")
     except ImportError:
-        print("✗ PyQt5 未安装，请运行: pip install -r requirements_gui.txt")
+        print("✗ Gradio 未安装，请运行: pip install gradio")
         return False
     
     try:
@@ -26,6 +26,13 @@ def check_dependencies():
         print("✓ OpenCV 已安装")
     except ImportError:
         print("✗ OpenCV 未安装")
+        return False
+    
+    try:
+        import torch
+        print("✓ PyTorch 已安装")
+    except ImportError:
+        print("✗ PyTorch 未安装")
         return False
     
     # 检查模型文件
@@ -40,20 +47,26 @@ def check_dependencies():
 
 def main():
     """主函数"""
-    print("手掌掌纹识别系统 - 桌面应用")
+    print("手掌掌纹识别系统 - 网页应用")
     print("=" * 50)
     
     if not check_dependencies():
         print("请安装缺失的依赖项后再运行")
         return
     
-    print("\n正在启动应用程序...")
+    print("\n正在启动网页应用...")
     
     try:
-        from apps.main_window import main as app_main
-        app_main()
+        from apps.web_app import create_web_app
+        app = create_web_app()
+        app.launch(
+            server_name="0.0.0.0",
+            server_port=7865,
+            share=False,
+            show_error=True
+        )
     except Exception as e:
-        print(f"启动应用程序时出错: {e}")
+        print(f"启动网页应用时出错: {e}")
         import traceback
         traceback.print_exc()
 
